@@ -1,116 +1,97 @@
-//#define _BSD_SOURCE
-#define _XOPEN_SOURCE 600
-#define _POSIX_C_SOURCE 200112L
+#define _XOPEN_SOURCE 600   //To support -std=c99 in place of -std=gnu99
 
+//Libraries
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <semaphore.h>
 #include <pthread.h>
 #include <time.h>
-#include <assert.h>
 
-#define QUEUE_SIZE 10 // Max_stu_size
-#define CODING_SLEEP_TIME 2000
+//Defines
+#define CODING_SLEEP_TIME 200
 #define TUTORING_SLEEP_TIME 200
 
-int studentsInWaitingAreaQueue[QUEUE_SIZE];  // newArrivedStudentQueue
-int studentIdsQueue[QUEUE_SIZE];             // student_ids
-int tutorIdsQueue[QUEUE_SIZE];               // tutor_ids
-int tutoringFinishedQueue[QUEUE_SIZE];       // tutorFinishedQueue
-int priorityQueueForTutoring[QUEUE_SIZE][2]; // priorityQueue
-int studentPriorities[QUEUE_SIZE];           // student_priority
+// Data structure arguments
+int *studentsInWaitingAreaQueue = NULL;  //Students in the queue
+int *studentIdsQueue = NULL;             //ID of students
+int *studentPriorities = NULL;           //Priority of students
+int *tutorIdsQueue = NULL;               //ID of tutors
+int *tutoringFinishedQueue = NULL;       //Queue to indicate that tutoring finished
+int **priorityQueueForTutoring = NULL;   //Priority queue
 
-int numberOfChairsInWaitingArea = 0; // chair_num
-int numberOfStudents = 0;            // student_num
-int numberOfTutors = 0;              // tutor_num
-int numberOfTimesHelpRequired = 0;   // help_num
-int numberOfOccupiedChairs = 0;      // occupied_chair_num
+//Input arguments
+int numberOfChairsInWaitingArea = 0; //Number of chairs
+int numberOfStudents = 0;            //Number of students 
+int numberOfTutors = 0;              //Number of tutors
+int numberOfTimesHelpRequired = 0;   //Number of times each student will take help
 
-int numberOfStudentsHelped = 0;    // done
-int totalTutoringRequests = 0;     // totalRequests
-int totalTutoringSessionsHeld = 0; // totalSessions
-int studentsBeingTutoredNow = 0;   // tutoringNow
+//Program related arguments
+int numberOfOccupiedChairs = 0;
+int numberOfStudentsHelped = 0;
+int totalTutoringRequests = 0;
+int totalTutoringSessionsHeld = 0;
+int studentsBeingTutoredNow = 0;
 
-void *studentThread(void *studentId);
+// thread-functions
 void *coordinatorThread();
+void *studentThread(void *studentId);
 void *tutorThread(void *tutorId);
 
-sem_t semCoordinatorIsWaitingForStudent; // sem_student
-sem_t semTutorIsWaitingForCoordinator;   // sem_coordinator
+sem_t semCoordinatorIsWaitingForStudent;
+sem_t semTutorIsWaitingForCoordinator;
 
-pthread_mutex_t chairsLock;                // seatLock
-pthread_mutex_t queueLock;                 // queueLock
-pthread_mutex_t tutoringFinishedQueueLock; // tutorFinishedQueueLock
+pthread_mutex_t chairsLock;
+pthread_mutex_t queueLock;
+pthread_mutex_t tutoringFinishedQueueLock;
 
-// the above variable will be equal to the size of queue for students in waiting area?
-/*
-int headOfQueue = -1;
-int tailOfQueue = -1;
-
-
-// insert the student's student_id in the queue. 
-// studentPriority to be incorporated into this
-void enqueue(int id)
+void *coordinatorThread()
 {
-    if( tailOfQueue == QUEUE_SIZE - 1 )
+    int tIterator = 0;
+
+    while(1)
     {
-        printf("\nOVERFLOW");
-        return;
-    }
-    else
-    {
-        if( headOfQueue == -1 )
+        //If all students are helped out, terminate the coordinatorThread and tutorThread
+        if(numberOfStudentsHelped == numberOfStudents)
         {
-            headOfQueue = 0;
+            //Terminate the tutors first
+            for(tIterator = 0; tIterator < numberOfTutors; tIterator++)
+            {
+                //Sending a signal informing tutors to terminate
+                sem_post(&semTutorIsWaitingForCoordinator);
+            }
+
+            //Then coordinator terminates itself
+            pthread_exit(NULL);
         }
-        tailOfQueue += 1;
-        studentsInWaitingAreaQueue[tailOfQueue] = id;
-    }
-}
 
-void dequeue()
-{
-    if ( headOfQueue == -1 || headOfQueue > tailOfQueue ) 
-    {
-        printf("\nUNDERFLOW");
-        return;
-    }
-    else
-    {
-        headOfQueue += 1;
-    }
-}
+        //Wait for student's availability notification
+        sem_wait(&semCoordinatorIsWaitingForStudent);
 
-struct studentInfo
-{
-    int id;
-    int numberOfTimesHelpReceived;
-    int studentPriority;
-};
+        //Acquire lock for shared variable
+        pthread_mutex_lock(&chairsLock);
+        for(tIterator = 0; tIterator < numberOfStudents; tIterator++)
+        {
+            //Adding each student to the 2-d priority queue
+            if(studentsInWaitingAreaQueue[tIterator] > -1)
+            {
+                //priorityQueueForTutoring contains 2 variables for each student
+                //0th Index: Student's priority
+                //1st Index: Student's position in the waiting queue
+                priorityQueueForTutoring[tIterator][0] = studentPriorities[tIterator];
+                priorityQueueForTutoring[tIterator][1] = studentsInWaitingAreaQueue[tIterator];
 
-*/
+                printf("C: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d\n", studentIdsQueue[tIterator], studentPriorities[tIterator], numberOfOccupiedChairs, totalTutoringRequests);
 
-void studentIsCoding()
-{
-    float codingTime = (float)(rand() % CODING_SLEEP_TIME) / 1000;
-    printf("\nStudent is coding for %f ms.", codingTime);
-    usleep(codingTime);
-}
+                //Clearing the student's position in the waitingAreaQueue and resetting it
+                studentsInWaitingAreaQueue[tIterator] = -1;
 
-void studentIsBeingTutored()
-{
-    float tutoringTime = (float)(rand() % TUTORING_SLEEP_TIME) / 1000;
-    printf("\nTutored for %f ms", tutoringTime);
-    usleep(tutoringTime);
-}
-
-void printArray(int *array, int length)
-{
-    int i = 0;
-    for (i = 0; i < length; i++)
-    {
-        printf("%d ", array[i]);
+                //Send signal to tutor to call the student with highest priority for tutoring
+                sem_post(&semTutorIsWaitingForCoordinator);
+            }
+        }
+        //Release lock for shared variable
+        pthread_mutex_unlock(&chairsLock);
     }
 }
 
@@ -118,33 +99,34 @@ void *studentThread(void *studentId)
 {
     int studentIdOfCurrentStudent = *(int *)studentId;
 
-    while (1)
+    while(1)
     {
-
-        if (studentPriorities[studentIdOfCurrentStudent - 1] >= numberOfTimesHelpRequired)
+        if(studentPriorities[studentIdOfCurrentStudent - 1] >= numberOfTimesHelpRequired)
         {
-
-            // ----- why chairs are locked for numberOfStudentsHelped?
-            // A: we only want to lock this shared variable, name doesn't matter
+            //Acquire lock for shared variable
             pthread_mutex_lock(&chairsLock);
+
             numberOfStudentsHelped++;
+
+            //Release lock for shared variable
             pthread_mutex_unlock(&chairsLock);
 
-            //notify coordinate to terminate
+            //Notify coordinate to terminate
             sem_post(&semCoordinatorIsWaitingForStudent);
 
-            printf("\n------student %d terminates------\n", studentIdOfCurrentStudent);
             pthread_exit(NULL);
         }
 
-        // ---------- should i implement random sleep?
-        // implemented
-        studentIsCoding();
+        //Student is coding for a random period upto 2ms
+        float codingTime = (float)(rand() % CODING_SLEEP_TIME) / 100;
+        usleep(codingTime);
 
+        //Acquire lock for shared variable
         pthread_mutex_lock(&chairsLock);
-        if (numberOfOccupiedChairs >= numberOfChairsInWaitingArea)
+
+        if(numberOfOccupiedChairs >= numberOfChairsInWaitingArea)
         {
-            printf("\nS: Student %d found no empty chair. Will try again later.\n", studentIdOfCurrentStudent);
+            printf("S: Student %d found no empty chair. Will try again later.\n", studentIdOfCurrentStudent);
             pthread_mutex_unlock(&chairsLock);
             continue;
         }
@@ -152,118 +134,58 @@ void *studentThread(void *studentId)
         numberOfOccupiedChairs++;
         totalTutoringRequests++;
 
-        // ---------- why?
-        // A: all incoming students are initialised with 0 or the current value of totalTutoringRequests.
-        // ++++++++++++
+        //All incoming students are initialised with 0 or the current value of totalTutoringRequests.
         studentsInWaitingAreaQueue[studentIdOfCurrentStudent - 1] = totalTutoringRequests;
-        printArray(studentsInWaitingAreaQueue, QUEUE_SIZE);
-        printf("\nstudentIds\n");
-        printArray(studentIdsQueue, QUEUE_SIZE);
-        printf("\ntutorIds\n");
-        printArray(tutorIdsQueue, QUEUE_SIZE);
-        printf("\nstudentpriorities\n");
-        printArray(studentPriorities, QUEUE_SIZE);
-        printf("\ntutfinished\n");
-        printArray(tutoringFinishedQueue, QUEUE_SIZE);
 
-        printf("\nS: Student %d takes a seat. Empty chairs = %d.", studentIdOfCurrentStudent, numberOfChairsInWaitingArea - numberOfOccupiedChairs);
+        printf("S: Student %d takes a seat. Empty chairs = %d.\n", studentIdOfCurrentStudent, numberOfChairsInWaitingArea - numberOfOccupiedChairs);
+
+        //Release lock for shared variable
         pthread_mutex_unlock(&chairsLock);
 
-        // inform coordinator that student is waiting
+        //Inform coordinator that student is waiting
         sem_post(&semCoordinatorIsWaitingForStudent);
 
-        // wait for tutor to be available
-        // ---------- how does it work?
-        while (tutoringFinishedQueue[studentIdOfCurrentStudent - 1] == -1)
-            ;
-
-        // lock the numberOfOccupiedChairs
-        //    pthread_mutex_lock(&chairsLock);
-        //    numberOfOccupiedChairs--;
-        //    pthread_mutex_unlock(&chairsLock);
-        // unlock the numberOfOccupiedChairs
+        //Wait for tutor to be available
+        while(tutoringFinishedQueue[studentIdOfCurrentStudent - 1] == -1);
 
         int tutorIdCurrentlyTutoring = (tutoringFinishedQueue[studentIdOfCurrentStudent - 1] - numberOfStudents);
 
-        //    studentIsBeingTutored(studentIdOfCurrentStudent);
+        printf("S: Student %d received help from Tutor %d.\n", studentIdOfCurrentStudent, tutorIdCurrentlyTutoring);
 
-        printf("\nS: Student %d received help from Tutor %d.\n", studentIdOfCurrentStudent, tutorIdCurrentlyTutoring);
-
+        //Acquire lock for shared variable
         pthread_mutex_lock(&tutoringFinishedQueueLock);
+
         tutoringFinishedQueue[studentIdOfCurrentStudent - 1] = -1;
+
+        //Release lock for shared variable
         pthread_mutex_unlock(&tutoringFinishedQueueLock);
 
-        //decrease the priority of student after providing help
+        //Decrease the priority of student after providing help
+        //Acquire lock for shared variable
         pthread_mutex_lock(&chairsLock);
+
         studentPriorities[studentIdOfCurrentStudent - 1]++;
+
+        //Release lock for shared variable
         pthread_mutex_unlock(&chairsLock);
-    }
-}
-
-void *coordinatorThread()
-{
-
-    while (1)
-    {
-
-        // if all students are helped out, terminate the coordinatorThread and tutorThread
-        if (numberOfStudentsHelped == numberOfStudents)
-        {
-            // terminate the tutors
-            int i = 0;
-            for (i = 0; i < numberOfTutors; i++)
-            {
-                // inform tutors to terminate
-                sem_post(&semTutorIsWaitingForCoordinator);
-            }
-
-            // coordinator terminates itself
-            printf("\nCoordinator terminates");
-            pthread_exit(NULL);
-        }
-
-        // wait for student's availability notification
-        sem_wait(&semCoordinatorIsWaitingForStudent);
-
-        int i = 0;
-        for (i = 0; i < numberOfStudents; i++)
-        {
-            pthread_mutex_lock(&chairsLock);
-            // *********************************************
-            if (studentsInWaitingAreaQueue[i] > -1)
-            {
-                priorityQueueForTutoring[i][0] = studentPriorities[i];
-                priorityQueueForTutoring[i][1] = studentsInWaitingAreaQueue[i];
-
-                printf("\nC: Student %d with priority %d added to the queue. Waiting students now = %d. Total requests = %d\n", studentIdsQueue[i], studentPriorities[i], numberOfOccupiedChairs, totalTutoringRequests);
-
-                // clearing the student's position in the waitingAreaQueue
-                studentsInWaitingAreaQueue[i] = -1;
-
-                sem_post(&semTutorIsWaitingForCoordinator);
-            }
-            pthread_mutex_unlock(&chairsLock);
-        }
     }
 }
 
 void *tutorThread(void *tutorId)
 {
-
     int tutorIdOfCurrentTutor = *(int *)tutorId;
-
     int numberOfTimesStudentIsTutored;
-    // students with same tutored times, who comes first has higher priority
+    int tIterator = 0;
+
+    //For students with same number of times being tutored, the one who comes first has higher priority
     int studentSequence;
     int studentId;
 
-    while (1)
+    while(1)
     {
-
-        // if all students are helped out, terminate the tutorThread
-        if (numberOfStudentsHelped == numberOfStudents)
+        //If all students are helped out, terminate the tutorThread
+        if(numberOfStudentsHelped == numberOfStudents)
         {
-            printf("\nTutor is exiting");
             pthread_exit(NULL);
         }
 
@@ -271,148 +193,216 @@ void *tutorThread(void *tutorId)
         studentSequence = numberOfStudents * numberOfTimesHelpRequired + 1;
         studentId = -1;
 
-        // wait for signal from coordinatorThread to be woken up
+        //Wait for signal from coordinatorThread to be woken up
         sem_wait(&semTutorIsWaitingForCoordinator);
 
-        // lock the numberOfOccupiedChairs
+        //Acquire lock for shared variable
         pthread_mutex_lock(&chairsLock);
-        int i;
-        for (i = 0; i < numberOfStudents; i++)
+
+        //Getting the latest values of numberOfTimesStudentIsTutored, studentSequence, studentId for each student 
+        for(tIterator = 0; tIterator < numberOfStudents; tIterator++)
         {
-            if (priorityQueueForTutoring[i][0] > -1 && priorityQueueForTutoring[i][0] <= numberOfTimesStudentIsTutored && priorityQueueForTutoring[i][1] < studentSequence)
+            //priorityQueueForTutoring contains 2 variables for each student
+            //0th Index: Student's priority
+            //1st Index: Student's position in the waiting queue
+            if(priorityQueueForTutoring[tIterator][0] > -1 && 
+            priorityQueueForTutoring[tIterator][0] <= numberOfTimesStudentIsTutored && 
+            priorityQueueForTutoring[tIterator][1] < studentSequence)
             {
-                numberOfTimesStudentIsTutored = priorityQueueForTutoring[i][0];
-                studentSequence = priorityQueueForTutoring[i][1];
-                studentId = studentIdsQueue[i];
+                numberOfTimesStudentIsTutored = priorityQueueForTutoring[tIterator][0];
+                studentSequence = priorityQueueForTutoring[tIterator][1];
+                studentId = studentIdsQueue[tIterator];
             }
         }
 
-        // in case no student in the queue.
-        if (studentId == -1)
+        //If the studentId was not updated, he/she is not in the queue
+        if(studentId == -1)
         {
+            //Release lock for shared variable
             pthread_mutex_unlock(&chairsLock);
             continue;
         }
 
-        //pop the student(reset the priority queue)
+        //Resetting the priority queue 
         priorityQueueForTutoring[studentId - 1][0] = -1;
         priorityQueueForTutoring[studentId - 1][1] = -1;
 
-        //occupied chair--
+        //Decreasing occupied chair count as the student is leaving the chair and will proceed for tutoring
         numberOfOccupiedChairs--;
-        // //all the students who are receiving tutoring now, since each tutor time slice is very tiny, so it's common that the tutoringNow is 0.
+
+        //Since the student left the chair and is moving for tutoring, increment its count
         studentsBeingTutoredNow++;
 
+        //Release lock for shared variable
         pthread_mutex_unlock(&chairsLock);
 
-        studentIsBeingTutored();
+        //Student is being tutored (0.2 ms)
+        usleep(TUTORING_SLEEP_TIME);
 
-        // after tutoring
+        //After tutoring the student
+        //Acquire lock for shared variable
         pthread_mutex_lock(&chairsLock);
 
-        //need to do tutoringNow-- after tutoring.
+        //Since student's tutoring is done, decrement tutoringNow after tutoring.
         studentsBeingTutoredNow--;
-        totalTutoringSessionsHeld++;
-        printf("\nT: Student %d tutored by Tutor %d. Students tutored now = %d. Total sessions tutored = %d\n", studentId, tutorIdOfCurrentTutor - numberOfStudents, studentsBeingTutoredNow, totalTutoringSessionsHeld);
 
+        //Increment the number of sessions held after tutoring
+        totalTutoringSessionsHeld++;
+
+        printf("T: Student %d tutored by Tutor %d. Students tutored now = %d. Total sessions tutored = %d\n", studentId, tutorIdOfCurrentTutor - numberOfStudents, studentsBeingTutoredNow, totalTutoringSessionsHeld);
+
+        //Release lock for shared variable
         pthread_mutex_unlock(&chairsLock);
 
-        //update shared data so student can know who tutored him.
+        //Acquire lock for shared variable
         pthread_mutex_lock(&tutoringFinishedQueueLock);
+        
+        //Update shared data so student can know who tutored him.
         tutoringFinishedQueue[studentId - 1] = tutorIdOfCurrentTutor;
+
+        //Release lock for shared variable
         pthread_mutex_unlock(&tutoringFinishedQueueLock);
+    }
+}
+
+void initializeVariables(int iNumberOfStudents, int iNumberOfTutors, int iNumberOfChairsInWaitingArea, int iNumberOfTimesHelpRequired)
+{
+    int tIterator = 0;
+
+    if(iNumberOfStudents < 1)
+    {
+        fprintf(stderr, "ERROR! There should be at least 1 student\n");
+        exit(-1);
+    }
+
+    if(iNumberOfTutors < 1)
+    {
+        fprintf(stderr, "ERROR! There should be at least 1 tutor\n");
+        exit(-1);
+    }
+
+    if(iNumberOfChairsInWaitingArea < 1)
+    {
+        fprintf(stderr, "ERROR! There should be at least 1 chair in waiting area\n");
+        exit(-1);
+    }
+
+    if(iNumberOfTimesHelpRequired < 0)
+    {
+        fprintf(stderr, "ERROR! No negative values of help allowed\n");
+        exit(-1);
+    }
+
+    studentsInWaitingAreaQueue = (int *) malloc(iNumberOfStudents * sizeof(int));
+    studentIdsQueue = (int *) malloc(iNumberOfStudents * sizeof(int));
+    studentPriorities = (int *) malloc(iNumberOfStudents * sizeof(int));
+    tutorIdsQueue = (int *) malloc(iNumberOfTutors * sizeof(int));
+    tutoringFinishedQueue = (int *) malloc(iNumberOfStudents * sizeof(int));
+
+    //priorityQueueForTutoring contains 2 variables for each student
+    //0th Index: Student's priority
+    //1st Index: Student's position in the waiting queue
+    priorityQueueForTutoring = (int **) malloc(iNumberOfStudents * sizeof(int *));
+
+    if(NULL == priorityQueueForTutoring)
+    {
+        fprintf(stderr, "ERROR! Memory allocation failed\n");
+        exit(-1);
+    }
+
+    for(tIterator = 0; tIterator < iNumberOfStudents; tIterator++)
+    {
+        priorityQueueForTutoring[tIterator] = (int *) malloc(2 * sizeof(int));
+
+        if(NULL == priorityQueueForTutoring)
+        {
+            fprintf(stderr, "ERROR! Memory allocation failed\n");
+            exit(-1);
+        }
+    }
+
+    if((NULL == studentsInWaitingAreaQueue) || (NULL == studentIdsQueue) || (NULL == studentPriorities) || (NULL == tutorIdsQueue) || (NULL == tutoringFinishedQueue))
+    {
+        fprintf(stderr, "ERROR! Memory allocation failed\n");
+        exit(-1);
     }
 }
 
 int main(int argc, char *argv[])
 {
+    int tIterator = 0;
 
-    if (argc != 5)
+    //Check for number of passed arguments
+    if(argc != 5)
     {
-        fprintf(stderr, "\nERROR! Please provide these 4 arguments: #students, #tutors, #chairs, #help to the code");
+        fprintf(stderr, "ERROR! Please provide sufficient arguments: #students, #tutors, #chairs, #help\n");
         exit(-1);
     }
 
+    //Convert arguments from character to integer
     numberOfStudents = atoi(argv[1]);
     numberOfTutors = atoi(argv[2]);
     numberOfChairsInWaitingArea = atoi(argv[3]);
     numberOfTimesHelpRequired = atoi(argv[4]);
 
-    if (numberOfStudents < 1)
+    //Argument validation and dynamic memory allocation
+    initializeVariables(numberOfStudents, numberOfTutors, numberOfChairsInWaitingArea, numberOfTimesHelpRequired);
+
+    //Fill default values
+    for(tIterator = 0; tIterator < numberOfStudents; tIterator++)
     {
-        fprintf(stderr, "\nError. There should be at least 1 student");
-        exit(-1);
+        studentsInWaitingAreaQueue[tIterator] = -1;
+        tutoringFinishedQueue[tIterator] = -1;
+        priorityQueueForTutoring[tIterator][0] = -1;
+        priorityQueueForTutoring[tIterator][1] = -1;
+        studentPriorities[tIterator] = 0;
     }
 
-    if (numberOfTutors < 1)
-    {
-        fprintf(stderr, "\nError. There should be at least 1 tutor");
-        exit(-1);
-    }
-
-    if (numberOfChairsInWaitingArea < 1)
-    {
-        fprintf(stderr, "\nError. There should be at least 1 chair in waiting area");
-        exit(-1);
-    }
-
-    if (numberOfTimesHelpRequired < 0)
-    {
-        fprintf(stderr, "\nError. No negative values of help allowed");
-        exit(-1);
-    }
-
-    // struct studentInfo studentInfo;
-
-    int i = 0;
-    for (i = 0; i < QUEUE_SIZE; i++)
-    {
-        studentsInWaitingAreaQueue[i] = -1;
-        tutoringFinishedQueue[i] = -1;
-        priorityQueueForTutoring[i][0] = -1;
-        priorityQueueForTutoring[i][1] = -1;
-        studentPriorities[i] = 0;
-    }
-
-    //init lock and semaphore
-    // initialized to 0 as on 1st wait call to sem, the current thread should be allowed and other threads should be blocked
+    //Initialize lock and semaphores
+    //Initialized to 0 as on 1st wait call to sem, the current thread should be allowed and other threads should be blocked
     sem_init(&semCoordinatorIsWaitingForStudent, 0, 0);
     sem_init(&semTutorIsWaitingForCoordinator, 0, 0);
     pthread_mutex_init(&chairsLock, NULL);
     pthread_mutex_init(&queueLock, NULL);
     pthread_mutex_init(&tutoringFinishedQueueLock, NULL);
 
-    //allocate threads
+    //Initialize threads
     pthread_t students[numberOfStudents];
     pthread_t tutors[numberOfTutors];
     pthread_t coordinator;
 
-    // //create threads
-    assert(pthread_create(&coordinator, NULL, coordinatorThread, NULL) == 0);
+    //Create threads
+    //Coordinator thread
+    pthread_create(&coordinator, NULL, coordinatorThread, NULL);
 
-    for (i = 0; i < numberOfStudents; i++)
+    for(tIterator = 0; tIterator < numberOfStudents; tIterator++)
     {
-        studentIdsQueue[i] = i + 1;
-        assert(pthread_create(&students[i], NULL, studentThread, (void *)&studentIdsQueue[i]) == 0);
+        studentIdsQueue[tIterator] = tIterator + 1;
+        //Student thread
+        pthread_create(&students[tIterator], NULL, studentThread, (void *)&studentIdsQueue[tIterator]);
     }
 
-    for (i = 0; i < numberOfTutors; i++)
+    for(tIterator = 0; tIterator < numberOfTutors; tIterator++)
     {
-        tutorIdsQueue[i] = i + numberOfStudents + 1;
-        assert(pthread_create(&tutors[i], NULL, tutorThread, (void *)&tutorIdsQueue[i]) == 0);
+        tutorIdsQueue[tIterator] = tIterator + numberOfStudents + 1;
+        //Tutor thread
+        pthread_create(&tutors[tIterator], NULL, tutorThread, (void *)&tutorIdsQueue[tIterator]);
     }
 
-    //join threads
+    //Join threads
+    //Coordinator thread
     pthread_join(coordinator, NULL);
 
-    for (i = 0; i < numberOfStudents; i++)
+    for(tIterator = 0; tIterator < numberOfStudents; tIterator++)
     {
-        pthread_join(studentIdsQueue[i], NULL);
+        //Student thread
+        pthread_join(students[tIterator], NULL);
     }
 
-    for (i = 0; i < numberOfTutors; i++)
+    for(tIterator = 0; tIterator < numberOfTutors; tIterator++)
     {
-        pthread_join(tutorIdsQueue[i], NULL);
+        //Tutor thread
+        pthread_join(tutors[tIterator], NULL);
     }
 
     return 0;
