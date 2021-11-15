@@ -54,6 +54,6 @@ You may also want to look at the solution for sleeping barber problem. It will g
 
 Make sure you compile your program as follows: 
 
-    gcc csmc.c –o csmc -Wall -Werror -pthreads -std=c99
+    gcc csmc.c –o csmc -Wall -Werror -pthread -std=c99
     
 There should not be any error messages and warning during compilation.
